@@ -100,6 +100,16 @@ static const struct flash_driver * const flash_drivers[] = {
 	&xcf_flash,
 	&xmc1xxx_flash,
 	&xmc4xxx_flash,
+	&at32f403xx_flash,
+	&at32f413xx_flash,
+	&at32f415xx_flash,
+	&at32f403axx_flash,
+	&at32f407xx_flash,
+	&at32wb415xx_flash,
+	&at32f421xx_flash,
+	&at32f425xx_flash,
+	&at32f435xx_flash,
+	&at32f437xx_flash,
 };
 
 const struct flash_driver *flash_driver_find_by_name(const char *name)
