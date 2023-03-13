@@ -319,5 +319,7 @@ extern const struct flash_driver at32f421xx_flash;
 extern const struct flash_driver at32f425xx_flash;
 extern const struct flash_driver at32f435xx_flash;
 extern const struct flash_driver at32f437xx_flash;
+extern const struct flash_driver at32f423xx_flash;
+extern const struct flash_driver at32f4xx_flash;
 
 #endif /* OPENOCD_FLASH_NOR_DRIVER_H */
