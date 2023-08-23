@@ -119,7 +119,7 @@ struct at32_flash_info
 	uint32_t        sector_num;
 	uint8_t         probed;
 	uint8_t         type_id;
-
+       uint32_t       usd_addr;
 	mcu_type_info   *type;
 	struct at32x_usd_data usd_data;
 	struct at32_spim_info spim_info;
@@ -211,8 +211,15 @@ static int at32_get_device_info(struct flash_bank *bank)
 		}
 		if(index == NUM_OF_MCU_TYPE)
 		{
-			LOG_ERROR("please select the matching algorithm");
-			return ERROR_FAIL;
+			if(at32x_info->cur_reg_base != 0)
+			{
+				at32x_info->type_id = index - 1;
+			}
+			else
+			{
+				LOG_ERROR("please select the matching algorithm");
+				return ERROR_FAIL;
+			}
 		}
 	}
 	LOG_INFO("This is target %s algorithm", at32_mcu_type[at32x_info->type_id].name);
@@ -344,15 +351,22 @@ static int at32_get_device_info(struct flash_bank *bank)
 				break;
 				
 		}
+
+		if(at32x_info->usd_addr == 0)
+		{
+			at32x_info->usd_addr = at32_mcu_type[at32x_info->type_id].usd_addr;
+		}
 		if(at32x_info->bank_addr == BANK1_BASE_ADDR)
 		{
-			at32x_info->cur_reg_base = at32_mcu_type[at32x_info->type_id].flash_bank1_reg;
+		       if(at32x_info->cur_reg_base == 0)	
+				at32x_info->cur_reg_base = at32_mcu_type[at32x_info->type_id].flash_bank1_reg;
 		}
 		else if((at32x_info->bank_addr == BANK2_BASE_ADDR || 
 		    at32x_info->bank_addr == BANK2_BASE_ADDR_4M) && 
 		   at32x_info->flash_size > 512)
 		{
-			at32x_info->cur_reg_base = at32_mcu_type[at32x_info->type_id].flash_bank2_reg;
+		      if(at32x_info->cur_reg_base == 0)
+				at32x_info->cur_reg_base = at32_mcu_type[at32x_info->type_id].flash_bank2_reg;
 		}
 		else
 		{
@@ -431,7 +445,28 @@ FLASH_BANK_COMMAND_HANDLER(at32x_flash_bank_command)
 
 		LOG_INFO("spim flash io_mux: 0x%" PRIx32 ", type: 0x%" PRIx32 ", size: 0x%" PRIx32 "", io_mux, type, size);
       }
-	
+	else
+	{
+		if(CMD_ARGC >= 7)
+		{
+			COMMAND_PARSE_NUMBER(u32, CMD_ARGV[6], at32x_info->cur_reg_base);
+		}
+		else
+		{
+			at32x_info->cur_reg_base = 0;
+		}
+
+		if(CMD_ARGC >= 8)
+		{
+			 COMMAND_PARSE_NUMBER(u32, CMD_ARGV[7], at32x_info->usd_addr);
+		}
+		else
+		{
+			at32x_info->usd_addr = 0;
+		}
+		LOG_INFO("flash reg address: 0x%" PRIx32 ", usd addr:  0x%x", 
+				(at32x_info->cur_reg_base ),  at32x_info->usd_addr);
+	}
 	bank->driver_priv = at32x_info;
 	at32x_info->bank_addr = bank->base;
 	at32x_info->probed = 0;
@@ -496,10 +531,10 @@ static int at32x_read_usd_data(struct flash_bank *bank)
 	struct target *target = bank->target;
 	uint32_t usd_data;
 	int retval;
-
+      
 	/* read user and read protection option bytes */
 //	retval = target_read_u32(target, AT32_USD_BASE_ADDR, &usd_data);
-	retval = target_read_u32(target, at32_mcu_type[at32x_info->type_id].usd_addr, &usd_data);
+	retval = target_read_u32(target, at32x_info->usd_addr, &usd_data);
 	if (retval != ERROR_OK)
 		return retval;
 
@@ -507,20 +542,20 @@ static int at32x_read_usd_data(struct flash_bank *bank)
 	at32x_info->usd_data.ssb = (usd_data >> 16) & 0xFF;
 
 	/* read user data option bytes */
-	retval = target_read_u32(target, at32_mcu_type[at32x_info->type_id].usd_addr+4, &usd_data);
+	retval = target_read_u32(target, at32x_info->usd_addr+4, &usd_data);
 	if (retval != ERROR_OK)
 		return retval;
 
 	at32x_info->usd_data.data = ((usd_data >> 8) & 0xFF00) | (usd_data & 0xFF);
 
 	/* read write protection option bytes */
-	retval = target_read_u32(target, at32_mcu_type[at32x_info->type_id].usd_addr+8, &usd_data);
+	retval = target_read_u32(target, at32x_info->usd_addr+8, &usd_data);
 	if (retval != ERROR_OK)
 		return retval;
 
 	at32x_info->usd_data.protection = ((usd_data >> 8) & 0xFF00) | (usd_data & 0xFF);
 
-	retval = target_read_u32(target, at32_mcu_type[at32x_info->type_id].usd_addr+0xc, &usd_data);
+	retval = target_read_u32(target, at32x_info->usd_addr+0xc, &usd_data);
 	if (retval != ERROR_OK)
 		return retval;
 
@@ -533,7 +568,7 @@ static int at32x_erase_usd_data(struct flash_bank *bank)
 {
 	struct target *target = bank->target;
 
-	at32x_set_base_reg(bank, AT32_BANK1_BASE_ADDR);
+//	at32x_set_base_reg(bank, AT32_BANK1_BASE_ADDR);
 
 	/* read user system data */
 	at32x_read_usd_data(bank);
@@ -578,7 +613,7 @@ static int at32x_write_usd_data(struct flash_bank *bank)
 	struct at32_flash_info *at32x_info = bank->driver_priv;
 	struct target *target = bank->target;
 
-	at32x_set_base_reg(bank, AT32_BANK1_BASE_ADDR);
+//	at32x_set_base_reg(bank, AT32_BANK1_BASE_ADDR);
 
 	/* unlock flash registers */
 	int retval = target_write_u32(target, at32x_get_flash_reg(bank, AT32_FLASH_UNLOCK_OFFSET), KEY1);
@@ -613,7 +648,7 @@ static int at32x_write_usd_data(struct flash_bank *bank)
 	target_buffer_set_u16(target, usd_data + 12, (at32x_info->usd_data.protection >> 16) & 0xff);
 	target_buffer_set_u16(target, usd_data + 14, (at32x_info->usd_data.protection >> 24) & 0xff);
 
-	retval = at32x_write_block(bank, usd_data, at32_mcu_type[at32x_info->type_id].usd_addr, sizeof(usd_data) / 2);
+	retval = at32x_write_block(bank, usd_data, at32x_info->usd_addr, sizeof(usd_data) / 2);
 	if (retval != ERROR_OK) {
 		if (retval == ERROR_TARGET_RESOURCE_NOT_AVAILABLE)
 			LOG_ERROR("working area required to erase options bytes");
@@ -1046,12 +1081,12 @@ COMMAND_HANDLER(at32x_handle_disable_access_protection_command)
 		LOG_ERROR("Target not halted");
 		return ERROR_TARGET_NOT_HALTED;
 	}
-
+/*
 	if(at32x_info->cur_reg_base != at32_mcu_type[at32x_info->type_id].flash_bank1_reg)
 	{
 		return ERROR_FLASH_OPERATION_FAILED;
 	}
-
+*/
 	if (at32x_erase_usd_data(bank) != ERROR_OK) {
 		LOG_INFO("at32x failed to erase usd");
 		return ERROR_OK;
