@@ -2,7 +2,7 @@
 #ifndef AT32_XX_H
 #define AT32_XX_H
 
-#define NUM_OF_MCU_TYPE                   0x0C
+#define NUM_OF_MCU_TYPE                   0x0D
 
 #define AT32F403XX_ID                     0x02
 #define AT32F413XX_ID                     0x04
