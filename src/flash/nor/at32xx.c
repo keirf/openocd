@@ -22,7 +22,7 @@
 
 
 #define AT32_USD_ADDR_1                     0x1FFFF800
-#define AT32_USD_ADDR_2                     0x1FFFFC00
+#define AT32_USD_ADDR_2                     0x1FFFC000
 
 
 mcu_type_info at32_mcu_type[NUM_OF_MCU_TYPE] = 
