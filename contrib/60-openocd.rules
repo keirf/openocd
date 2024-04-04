@@ -263,6 +263,6 @@ ATTRS{idVendor}=="c251", ATTRS{idProduct}=="2750", MODE="660", GROUP="plugdev", 
 ATTRS{product}=="*CMSIS-DAP*", MODE="660", GROUP="plugdev", TAG+="uaccess"
 
 # Artery ATLINK
-ATTRS{idVendor}=="2e3c", ATTRS{idProduct}=="f000, MODE="660", GROUP="plugdev", TAG+="uaccess"
+ATTRS{idVendor}=="2e3c", ATTRS{idProduct}=="f000", MODE="660", GROUP="plugdev", TAG+="uaccess"
 
 LABEL="openocd_rules_end"
