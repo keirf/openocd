@@ -90,9 +90,8 @@ NOR_DRIVERS = \
 	%D%/xcf.c \
 	%D%/xmc1xxx.c \
 	%D%/xmc4xxx.c \
-	%D%/hpm_xpi.c
-	%D%/at32f4xx.c \
-	%D%/at32xx.c
+	%D%/hpm_xpi.c \
+	%D%/at32f4xx.c
 
 NORHEADERS = \
 	%D%/artery.h \
