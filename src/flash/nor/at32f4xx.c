@@ -701,12 +701,21 @@ static int at32x_protect_check(struct flash_bank *bank)
 {
 	struct at32_flash_info *at32x_info = bank->driver_priv;
 	struct at32_sub_bank *sub_bank = &at32x_info->sub_bank[0];
-	uint32_t protection;
+	uint32_t epps;
+	unsigned int i, nr;
 
-	ERR_CHECK(sub_bank_read_reg(sub_bank, EFC_EPPS, &protection));
+	ERR_CHECK(sub_bank_read_reg(sub_bank, EFC_EPPS, &epps));
 
-	for (unsigned int i = 0; i < bank->num_prot_blocks; i++)
-		bank->prot_blocks[i].is_protected = (protection & (1 << i)) ? 0 : 1;
+	nr = min_t(unsigned int, 32, bank->num_prot_blocks);
+	for (i = 0; i < nr; i++)
+		bank->prot_blocks[i].is_protected = !(epps & (1 << i));
+
+	if (bank->num_prot_blocks <= 32)
+		return ERROR_OK;
+
+	ERR_CHECK(sub_bank_read_reg(sub_bank, EFC_EPPS1, &epps));
+	for (i = 32; i < bank->num_prot_blocks; i++)
+		bank->prot_blocks[i].is_protected = !(epps & (1 << (i-32)));
 
 	return ERROR_OK;
 }
@@ -1003,7 +1012,7 @@ static int at32x_write(struct flash_bank *bank, const uint8_t *buffer,
 static int at32x_probe(struct flash_bank *bank)
 {
 	struct at32_flash_info *at32x_info = bank->driver_priv;
-	int num_pages, num_prot_blocks, secsz;
+	unsigned int i, num_pages, num_prot_blocks, secsz, sum;
 
 	if (at32x_info->probed)
 		return ERROR_OK;
@@ -1029,17 +1038,34 @@ static int at32x_probe(struct flash_bank *bank)
 	if (!bank->sectors)
 		return ERROR_FAIL;
 
-	num_prot_blocks = (at32x_info->flash_size + 4095) / 4096;
-	if (num_prot_blocks > 32)
-		num_prot_blocks = 32;
+	if (at32x_info->chip->type == &at32f435
+	    || at32x_info->chip->type == &at32f437) {
+		/* 32 4k blocks, remainder as 128k blocks */
+		assert(bank->size >= (128<<10));
+		num_prot_blocks = 32 + (bank->size - 1) / (128<<10);
+	} else {
+		/* 31 4k blocks, remainder in 32nd block */
+		num_prot_blocks = min_t(
+			int, 32, (at32x_info->flash_size + 4095) / 4096);
+	}
 
 	bank->num_prot_blocks = num_prot_blocks;
 	bank->prot_blocks = alloc_block_array(0, 4096, num_prot_blocks);
 	if (!bank->prot_blocks)
 		return ERROR_FAIL;
 
-	if (num_prot_blocks == 32)
-		bank->prot_blocks[31].size = (num_pages - (31 * 2)) * secsz;
+	/* 33rd and later blocks each protect up to 128kB. */
+	for (i = 32; i < num_prot_blocks; i++)
+		bank->prot_blocks[i].size = 128<<10;
+
+	/* Final protection block protects remainder of flash. */
+	for (i = sum = 0; i < num_prot_blocks-1; i++) {
+		bank->prot_blocks[i].offset = sum;
+		sum += bank->prot_blocks[i].size;
+	}
+	assert(sum < bank->size);
+	bank->prot_blocks[i].offset = sum;
+	bank->prot_blocks[i].size = bank->size - sum;
 
 	at32x_info->probed = 1;
 
