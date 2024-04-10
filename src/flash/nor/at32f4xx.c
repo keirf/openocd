@@ -78,12 +78,10 @@
 #define EFCUSD_DEPSLP_RST		3
 #define EFCUSD_STDBY_RST		4
 
-struct at32_usd_data {
-	uint8_t fap;
-	uint8_t ssb;
-	uint16_t data;
-	uint32_t protection;
-};
+/* Offsets into USD data */
+#define USD_FAP				0x0
+#define USD_EPP0			0x4
+#define USD_EPP4			0xA
 
 struct at32_spim_info {
 	uint32_t is_spim;
@@ -110,7 +108,6 @@ struct at32_flash_info {
 	uint8_t probed;
 	uint32_t usd_addr;
 	const struct artery_chip *chip;
-	struct at32_usd_data usd_data;
 	struct at32_spim_info spim_info;
 };
 
@@ -127,43 +124,44 @@ struct mcu_type_info {
 	uint32_t flash_reg;
 	uint32_t usd_addr;
 	const char *name;
+	uint32_t usd_size; /* not including complement bytes */
 };
 
 struct mcu_type_info at32f403 = {
-	0x40022000, 0x1FFFF800, "AT32F403"
-};
-struct mcu_type_info at32f413 = {
-	0x40022000, 0x1FFFF800, "AT32F413"
-};
-struct mcu_type_info at32f415 = {
-	0x40022000, 0x1FFFF800, "AT32F415"
+	0x40022000, 0x1FFFF800, "AT32F403", 24, /* XXX double check */
 };
 struct mcu_type_info at32f403a = {
-	0x40022000, 0x1FFFF800, "AT32F403A"
+	0x40022000, 0x1FFFF800, "AT32F403A",24,
 };
 struct mcu_type_info at32f407 = {
-	0x40022000, 0x1FFFF800, "AT32F407"
+	0x40022000, 0x1FFFF800, "AT32F407", 24,
+};
+struct mcu_type_info at32f413 = {
+	0x40022000, 0x1FFFF800, "AT32F413", 24,
+};
+struct mcu_type_info at32f415 = {
+	0x40022000, 0x1FFFF800, "AT32F415", 512,
 };
 struct mcu_type_info at32f421 = {
-	0x40022000, 0x1FFFF800, "AT32F421"
-};
-struct mcu_type_info at32f435 = {
-	0x40023C00, 0x1FFFC000, "AT32F435"
-};
-struct mcu_type_info at32f437 = {
-	0x40023C00, 0x1FFFC000, "AT32F437"
-};
-struct mcu_type_info at32f425 = {
-	0x40022000, 0x1FFFF800, "AT32F425"
-};
-struct mcu_type_info at32l021 = {
-	0x40022000, 0x1FFFF800, "AT32L021"
-};
-struct mcu_type_info at32wb415 = {
-	0x40022000, 0x1FFFF800, "AT32WB415"
+	0x40022000, 0x1FFFF800, "AT32F421", 256,
 };
 struct mcu_type_info at32f423 = {
-	0x40023C00, 0x1FFFF800, "AT32F423"
+	0x40023C00, 0x1FFFF800, "AT32F423", 256,
+};
+struct mcu_type_info at32f425 = {
+	0x40022000, 0x1FFFF800, "AT32F425", 256,
+};
+struct mcu_type_info at32f435 = {
+	0x40023C00, 0x1FFFC000, "AT32F435", 256, /* 2048 on some parts */
+};
+struct mcu_type_info at32f437 = {
+	0x40023C00, 0x1FFFC000, "AT32F437", 256, /* 2048 on some parts */
+};
+struct mcu_type_info at32l021 = {
+	0x40022000, 0x1FFFF800, "AT32L021", 256,
+};
+struct mcu_type_info at32wb415 = {
+	0x40022000, 0x1FFFF800, "AT32WB415", 512,
 };
 
 struct artery_chip {
@@ -608,48 +606,41 @@ static int at32x_wait_status_busy(struct at32_sub_bank *sub_bank, int timeout)
 	return retval;
 }
 
-static int at32x_read_usd_data(struct flash_bank *bank)
+static int at32x_read_usd_data(struct flash_bank *bank, uint8_t **pusd_data)
 {
 	struct at32_flash_info *at32x_info = bank->driver_priv;
 	struct target *target = bank->target;
-	uint32_t usd_data;
+	uint8_t *usd_data = *pusd_data;
+	unsigned int i;
+	uint32_t x;
 
-	/* read user and read protection option bytes */
-	ERR_CHECK(target_read_u32(target, at32x_info->usd_addr, &usd_data));
+	if (usd_data == NULL) {
+		usd_data = malloc(at32x_info->chip->type->usd_size);
+		*pusd_data = usd_data;
+	}
 
-	at32x_info->usd_data.fap = usd_data & 0xFF;
-	at32x_info->usd_data.ssb = (usd_data >> 16) & 0xFF;
-
-	/* read user data option bytes */
-	ERR_CHECK(target_read_u32(target, at32x_info->usd_addr+4, &usd_data));
-
-	at32x_info->usd_data.data = ((usd_data >> 8) & 0xFF00) | (usd_data & 0xFF);
-
-	/* read write protection option bytes */
-	ERR_CHECK(target_read_u32(target, at32x_info->usd_addr+8, &usd_data));
-
-	at32x_info->usd_data.protection = ((usd_data >> 8) & 0xFF00) | (usd_data & 0xFF);
-
-	ERR_CHECK(target_read_u32(target, at32x_info->usd_addr+0xc, &usd_data));
-
-	at32x_info->usd_data.protection |= (((usd_data >> 8) & 0xFF00) | (usd_data & 0xFF)) << 16;
+	for (i = 0; i < at32x_info->chip->type->usd_size; i += 2) {
+		ERR_CHECK(target_read_u32(target, at32x_info->usd_addr + i*2,
+					  &x));
+		usd_data[i] = (uint8_t)x;
+		usd_data[i+1] = (uint8_t)(x >> 16);
+	}
 
 	return ERROR_OK;
 }
 
-static int at32x_erase_usd_data(struct flash_bank *bank)
+static int at32x_erase_usd_data(struct flash_bank *bank, uint8_t **pusd_data)
 {
 	struct at32_flash_info *at32x_info = bank->driver_priv;
 	struct at32_sub_bank *sub_bank = &at32x_info->sub_bank[0];
 	uint32_t op = EFCCTRL_USDERS | EFCCTRL_USDULKS;
 
-	at32x_read_usd_data(bank);
+	at32x_read_usd_data(bank, pusd_data);
 
 	ERR_CHECK(at32x_flash_unlock(sub_bank));
 
 	ERR_CHECK(at32x_usd_unlock(bank));
 
-	/* erase user system data */
 	ERR_CHECK(sub_bank_write_reg(sub_bank, EFC_CTRL, op));
 	
 	ERR_CHECK(sub_bank_write_reg(sub_bank, EFC_CTRL,
@@ -660,41 +651,37 @@ static int at32x_erase_usd_data(struct flash_bank *bank)
 	return ERROR_OK;
 }
 
-static int at32x_write_usd_data(struct flash_bank *bank)
+static int at32x_write_usd_data(struct flash_bank *bank, uint8_t *usd_data)
 {
 	struct at32_flash_info *at32x_info = bank->driver_priv;
 	struct at32_sub_bank *sub_bank = &at32x_info->sub_bank[0];
 	struct target *target = bank->target;
-	uint8_t usd_data[16];
+	uint8_t *wdata;
+	unsigned int i;
 	int retval;
 
 	ERR_CHECK(at32x_flash_unlock(sub_bank));
 
 	ERR_CHECK(at32x_usd_unlock(bank));
 
-	/* program option bytes */
 	ERR_CHECK(sub_bank_write_reg(sub_bank, EFC_CTRL, 
 				     EFCCTRL_USDPRGM | EFCCTRL_USDULKS));
 
-	target_buffer_set_u16(target, usd_data, at32x_info->usd_data.fap);
-	target_buffer_set_u16(target, usd_data + 2, at32x_info->usd_data.ssb);
-	target_buffer_set_u16(target, usd_data + 4, at32x_info->usd_data.data & 0xff);
-	target_buffer_set_u16(target, usd_data + 6, (at32x_info->usd_data.data >> 8) & 0xff);
-	target_buffer_set_u16(target, usd_data + 8, at32x_info->usd_data.protection & 0xff);
-	target_buffer_set_u16(target, usd_data + 10, (at32x_info->usd_data.protection >> 8) & 0xff);
-	target_buffer_set_u16(target, usd_data + 12, (at32x_info->usd_data.protection >> 16) & 0xff);
-	target_buffer_set_u16(target, usd_data + 14, (at32x_info->usd_data.protection >> 24) & 0xff);
+	wdata = malloc(at32x_info->chip->type->usd_size * 2);
 
-	retval = at32x_write_block(sub_bank, usd_data, at32x_info->usd_addr, sizeof(usd_data) / 2);
-	if (retval != ERROR_OK) {
-		if (retval == ERROR_TARGET_RESOURCE_NOT_AVAILABLE)
-			LOG_ERROR("working area required to erase options bytes");
-		return retval;
-	}
+	for (i = 0; i < at32x_info->chip->type->usd_size; i++)
+		target_buffer_set_u16(target, wdata + i*2, usd_data[i]);
 
-	ERR_CHECK(sub_bank_write_reg(sub_bank, EFC_CTRL, EFCCTRL_OPLK));
+	retval = at32x_write_block(sub_bank, wdata, at32x_info->usd_addr,
+				   at32x_info->chip->type->usd_size);
+	if (retval == ERROR_TARGET_RESOURCE_NOT_AVAILABLE)
+		LOG_ERROR("working area required to write option bytes");
 
-	return ERROR_OK;
+	(void)sub_bank_write_reg(sub_bank, EFC_CTRL, EFCCTRL_OPLK);
+
+	free(wdata);
+
+	return retval;
 }
 
 static int at32x_protect_check(struct flash_bank *bank)
@@ -743,9 +730,7 @@ static int at32x_sub_bank_erase(struct at32_sub_bank *sub_bank, unsigned int fir
 		bank->sectors[i].is_erased = 1;
 	}
 
-	ERR_CHECK(sub_bank_write_reg(sub_bank, EFC_CTRL, EFCCTRL_OPLK));
-
-	return ERROR_OK;
+	return sub_bank_write_reg(sub_bank, EFC_CTRL, EFCCTRL_OPLK);
 }
 
 static int at32x_erase(struct flash_bank *bank, unsigned int first, unsigned int last)
@@ -786,26 +771,37 @@ static int at32x_protect(struct flash_bank *bank, int set, unsigned int first, u
 {
 	struct target *target = bank->target;
 	struct at32_flash_info *at32x_info = bank->driver_priv;
+	uint8_t *usd_data = NULL;
 	int retval;
+
 	if (target->state != TARGET_HALTED) {
 		LOG_ERROR("Target not halted");
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
-	retval = at32x_erase_usd_data(bank);
+	retval = at32x_erase_usd_data(bank, &usd_data);
 	if (retval != ERROR_OK) {
-		LOG_ERROR("%s%s failed to erase options", at32x_info->chip->type->name, at32x_info->chip->suffix);
-		return retval;
+		LOG_ERROR("%s%s failed to erase options",
+			  at32x_info->chip->type->name,
+			  at32x_info->chip->suffix);
+		goto out;
 	}
 
 	for (unsigned int i = first; i <= last; i++) {
+		unsigned int b = USD_EPP0 + i/8;
+		if (b >= 8)
+			b += 2; /* Skip to USD_EPP4 */
 		if (set)
-			at32x_info->usd_data.protection &= ~(1 << i);
+			usd_data[b] &= ~(1 << (i&7));
 		else
-			at32x_info->usd_data.protection |= (1 << i);
+			usd_data[b] |= (1 << (i&7));
 	}
 
-	return at32x_write_usd_data(bank);
+	retval = at32x_write_usd_data(bank, usd_data);
+
+out:
+	free(usd_data);
+	return retval;
 }
 
 static int at32x_write_block(struct at32_sub_bank *sub_bank,
@@ -910,7 +906,7 @@ static int at32x_sub_bank_write(struct at32_sub_bank *sub_bank,
 {
 	struct target *target = sub_bank->bank->target;
 	uint32_t words_remaining = count / 2;
-	int retval, retval2;
+	int retval;
 
 	retval = at32x_flash_unlock(sub_bank);
 	if (retval != ERROR_OK)
@@ -920,7 +916,6 @@ static int at32x_sub_bank_write(struct at32_sub_bank *sub_bank,
 	if (retval != ERROR_OK)
 		goto reset_pg_and_lock;
 
-	/* try using a block write */
 	retval = at32x_write_block(sub_bank, buffer, sub_bank->base + offset, words_remaining);
 
 	if (retval == ERROR_TARGET_RESOURCE_NOT_AVAILABLE) {
@@ -945,10 +940,7 @@ static int at32x_sub_bank_write(struct at32_sub_bank *sub_bank,
 	}
 
 reset_pg_and_lock:
-	retval2 = sub_bank_write_reg(sub_bank, EFC_CTRL, EFCCTRL_OPLK);
-	if (retval == ERROR_OK)
-		retval = retval2;
-
+	(void)sub_bank_write_reg(sub_bank, EFC_CTRL, EFCCTRL_OPLK);
 	return retval;
 }
 
@@ -1097,9 +1089,7 @@ static int at32x_sub_bank_mass_erase(struct at32_sub_bank *sub_bank)
 
 	ERR_CHECK(at32x_wait_status_busy(sub_bank, FLASH_MASS_ERASE_TIMEOUT));
 
-	ERR_CHECK(sub_bank_write_reg(sub_bank, EFC_CTRL, EFCCTRL_OPLK));
-
-	return ERROR_OK;
+	return sub_bank_write_reg(sub_bank, EFC_CTRL, EFCCTRL_OPLK);
 }
 
 static int at32x_mass_erase(struct flash_bank *bank)
@@ -1144,8 +1134,8 @@ COMMAND_HANDLER(at32x_handle_mass_erase_command)
 
 COMMAND_HANDLER(at32x_handle_disable_access_protection_command)
 {
-	struct target *target = NULL;
-	struct at32_flash_info *at32x_info = NULL;
+	struct target *target;
+	uint8_t *usd_data = NULL;
 
 	if (CMD_ARGC < 1)
 		return ERROR_COMMAND_SYNTAX_ERROR;
@@ -1153,8 +1143,6 @@ COMMAND_HANDLER(at32x_handle_disable_access_protection_command)
 	struct flash_bank *bank;
 	
 	ERR_CHECK(CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank));
-
-	at32x_info = bank->driver_priv;
 	target = bank->target;
 
 	if (target->state != TARGET_HALTED) {
@@ -1162,18 +1150,20 @@ COMMAND_HANDLER(at32x_handle_disable_access_protection_command)
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
-	if (at32x_erase_usd_data(bank) != ERROR_OK) {
+	if (at32x_erase_usd_data(bank, &usd_data) != ERROR_OK) {
 		LOG_INFO("at32x failed to erase usd");
-		return ERROR_OK;
+		goto out;
 	}
-	at32x_info->usd_data.fap = 0xA5;
-	if (at32x_write_usd_data(bank) != ERROR_OK) {
+	usd_data[USD_FAP] = 0xA5;
+	if (at32x_write_usd_data(bank, usd_data) != ERROR_OK) {
 		LOG_INFO("at32x failed to write usd");
-		return ERROR_OK;
+		goto out;
 	}
 
 	LOG_INFO("AT32x disable access protection complete");
 
+out:
+	free(usd_data);
 	return ERROR_OK;
 }
 
