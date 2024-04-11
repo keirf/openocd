@@ -635,7 +635,8 @@ static int at32x_erase_usd_data(struct flash_bank *bank, uint8_t **pusd_data)
 	struct at32_sub_bank *sub_bank = &at32x_info->sub_bank[0];
 	uint32_t op = EFCCTRL_USDERS | EFCCTRL_USDULKS;
 
-	at32x_read_usd_data(bank, pusd_data);
+	if (pusd_data)
+		at32x_read_usd_data(bank, pusd_data);
 
 	ERR_CHECK(at32x_flash_unlock(sub_bank));
 
@@ -657,8 +658,8 @@ static int at32x_write_usd_data(struct flash_bank *bank, uint8_t *usd_data)
 	struct at32_sub_bank *sub_bank = &at32x_info->sub_bank[0];
 	struct target *target = bank->target;
 	uint8_t *wdata;
-	unsigned int i;
-	int retval;
+	unsigned int i, j;
+	int retval = ERROR_OK;
 
 	ERR_CHECK(at32x_flash_unlock(sub_bank));
 
@@ -669,14 +670,38 @@ static int at32x_write_usd_data(struct flash_bank *bank, uint8_t *usd_data)
 
 	wdata = malloc(at32x_info->chip->type->usd_size * 2);
 
-	for (i = 0; i < at32x_info->chip->type->usd_size; i++)
-		target_buffer_set_u16(target, wdata + i*2, usd_data[i]);
+	for (i = j = 0; i < at32x_info->chip->type->usd_size; i++) {
+		uint16_t y, x = usd_data[i];
+		x |= ~x << 8;
+		ERR_CHECK(target_read_u16(target, at32x_info->usd_addr + i*2,
+					  &y));
+		if ((x == y) || (x == 0xff && y == 0xffff)) {
+			/* This byte doesn't need to be written. Write any 
+                         * preceding sequence of modified bytes as a block. */
+			if (i > j) {
+				retval = at32x_write_block(
+					sub_bank, &wdata[j*2],
+					at32x_info->usd_addr + j*2, i-j);
+				if (retval != ERROR_OK)
+					goto lock_out;
+			}
+			/* Next byte is candidate to start a modified block. */
+			j = i+1;
+		} else {
+			/* This byte is modified and needs to be written. 
+                         * We will do that as part of a block, later. */
+			target_buffer_set_u16(target, wdata + i*2, usd_data[i]);
+		}
+	}
 
-	retval = at32x_write_block(sub_bank, wdata, at32x_info->usd_addr,
-				   at32x_info->chip->type->usd_size);
-	if (retval == ERROR_TARGET_RESOURCE_NOT_AVAILABLE)
-		LOG_ERROR("working area required to write option bytes");
+	/* Write the final modified block, if any. */
+	if (i > j) {
+		retval = at32x_write_block(
+			sub_bank, &wdata[j*2],
+			at32x_info->usd_addr + j*2, i-j);
+	}
 
+lock_out:
 	(void)sub_bank_write_reg(sub_bank, EFC_CTRL, EFCCTRL_OPLK);
 
 	free(wdata);
@@ -1118,10 +1143,7 @@ COMMAND_HANDLER(at32x_handle_mass_erase_command)
 	struct flash_bank *bank;
 	int retval;
 
-	if (CMD_ARGC < 1)
-		return ERROR_COMMAND_SYNTAX_ERROR;
-
-	ERR_CHECK(CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank));
+	ERR_CHECK(get_flash_bank_by_num(0, &bank));
 
 	retval = at32x_mass_erase(bank);
 	if (retval == ERROR_OK)
@@ -1132,35 +1154,74 @@ COMMAND_HANDLER(at32x_handle_mass_erase_command)
 	return retval;
 }
 
-COMMAND_HANDLER(at32x_handle_disable_access_protection_command)
+COMMAND_HANDLER(at32x_handle_usd_erase_command)
+{
+	struct flash_bank *bank;
+
+	ERR_CHECK(get_flash_bank_by_num(0, &bank));
+
+	return at32x_erase_usd_data(bank, NULL);
+}
+
+COMMAND_HANDLER(at32x_handle_usd_write_command)
 {
 	struct target *target;
 	uint8_t *usd_data = NULL;
+	struct flash_bank *bank;
+	uint32_t offset;
+	uint8_t x, value, mask = 0xff;
+	struct at32_flash_info *at32x_info;
 
-	if (CMD_ARGC < 1)
+	if (CMD_ARGC < 2)
 		return ERROR_COMMAND_SYNTAX_ERROR;
 
-	struct flash_bank *bank;
-	
-	ERR_CHECK(CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank));
+	COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], offset);
+	COMMAND_PARSE_NUMBER(u8, CMD_ARGV[1], value);
+	if (CMD_ARGC > 2)
+		COMMAND_PARSE_NUMBER(u8, CMD_ARGV[2], mask);
+
+	ERR_CHECK(get_flash_bank_by_num(0, &bank));
 	target = bank->target;
+	at32x_info = bank->driver_priv;
+
+	if (offset >= at32x_info->chip->type->usd_size) {
+		LOG_ERROR("offset is outside usd area [0..%u]",
+			  at32x_info->chip->type->usd_size-1);
+		return ERROR_FAIL;
+	}
 
 	if (target->state != TARGET_HALTED) {
 		LOG_ERROR("Target not halted");
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
-	if (at32x_erase_usd_data(bank, &usd_data) != ERROR_OK) {
+	if (at32x_read_usd_data(bank, &usd_data) != ERROR_OK) {
+		LOG_INFO("at32x failed to read usd");
+		goto out;
+	}
+
+	/* Calculate modified byte value and check it really has changed. */
+	x = usd_data[offset];
+	x = (x & ~mask) | (value & mask);
+	LOG_INFO("usd write %04x: %02x -> %02x", offset, usd_data[offset], x);
+	if (x == usd_data[offset]) {
+		LOG_INFO("usd byte unchanged");
+		goto out;
+	}
+
+	/* Erase the USD space if the modified byte is not in erased state. */
+	if ((usd_data[offset] != 0xff) &&
+	    (at32x_erase_usd_data(bank, NULL) != ERROR_OK)) {
 		LOG_INFO("at32x failed to erase usd");
 		goto out;
 	}
-	usd_data[USD_FAP] = 0xA5;
+
+	/* Write the modified byte. */
+	usd_data[offset] = x;
 	if (at32x_write_usd_data(bank, usd_data) != ERROR_OK) {
 		LOG_INFO("at32x failed to write usd");
 		goto out;
 	}
-
-	LOG_INFO("AT32x disable access protection complete");
 
 out:
 	free(usd_data);
@@ -1172,15 +1233,20 @@ static const struct command_registration at32f4xx_exec_command_handlers[] = {
 		.name = "mass_erase",
 		.handler = at32x_handle_mass_erase_command,
 		.mode = COMMAND_EXEC,
-		.usage = "bank_id",
 		.help = "Erase entire flash device.",
 	},
 	{
-		.name = "disable_access_protection",
-		.handler = at32x_handle_disable_access_protection_command,
+		.name = "usd_erase",
+		.handler = at32x_handle_usd_erase_command,
 		.mode = COMMAND_EXEC,
-		.usage = "bank_id",
-		.help = "Disable read-access protection",
+		.help = "Erase USD/Options area.",
+	},
+	{
+		.name = "usd_write",
+		.handler = at32x_handle_usd_write_command,
+		.mode = COMMAND_EXEC,
+		.usage = "offset value [mask]",
+		.help = "Write one byte of USD/Options area.",
 	},
 	COMMAND_REGISTRATION_DONE
 };
