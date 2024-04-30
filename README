@@ -1,3 +1,21 @@
+# OpenOCD patched for Artery AT32F4xx
+
+This repository frequently rebases onto openocd-org/openocd. It
+includes patches from dron0gus/openocd and ArteryTek/openocd but
+substantially rewritten. It is tested fairly well on AT32F415
+and AT32F435 chips. Features:
+- Auto-detect chip model and features based on DEBUG_IDCODE.
+  This works even when Flash is read protected!
+- On larger devices with two primary flash banks, present these
+  as a single bank.
+- Improved custom flash commands for USD erase and modification.
+- Many bug fixes!
+
+Please use keirf/openocd for bug reports and discussions.
+
+    Keir Fraser <keir.xen@gmail.com>
+
+
 # Welcome to OpenOCD!
 
 OpenOCD provides on-chip programming and debugging support with a
