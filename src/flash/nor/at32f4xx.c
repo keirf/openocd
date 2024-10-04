@@ -648,7 +648,9 @@ static int at32x_erase_usd_data(struct flash_bank *bank, uint8_t **pusd_data)
 				     op | EFCCTRL_ERSTR));
 
 	ERR_CHECK(at32x_wait_status_busy(sub_bank, FLASH_SECTOR_ERASE_TIMEOUT));
-	
+
+	(void)sub_bank_write_reg(sub_bank, EFC_CTRL, EFCCTRL_OPLK);
+
 	return ERROR_OK;
 }
 
