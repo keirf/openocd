@@ -677,8 +677,12 @@ static int at32x_write_usd_data(struct flash_bank *bank, uint8_t *usd_data)
 		x |= ~x << 8;
 		ERR_CHECK(target_read_u16(target, at32x_info->usd_addr + i*2,
 					  &y));
-		if ((x == y) || (x == 0xff && y == 0xffff)) {
-			/* This byte doesn't need to be written. Write any 
+		if ((x == y)
+		    /* Erased: All ones. */
+		    || (x == 0x00ff && y == 0xffff)
+		    /* Reserved: All zeroes. */
+		    || (x == 0xff00 && y == 0x0000)) {
+			/* This byte doesn't need to be written. Write any
                          * preceding sequence of modified bytes as a block. */
 			if (i > j) {
 				retval = at32x_write_block(
@@ -689,6 +693,10 @@ static int at32x_write_usd_data(struct flash_bank *bank, uint8_t *usd_data)
 			}
 			/* Next byte is candidate to start a modified block. */
 			j = i+1;
+		} else if (y != 0xffff) {
+			LOG_WARNING("USD word %d needs erasure: %04x", i, y);
+			retval = ERROR_FLASH_SECTOR_NOT_ERASED;
+			goto lock_out;
 		} else {
 			/* This byte is modified and needs to be written. 
                          * We will do that as part of a block, later. */
