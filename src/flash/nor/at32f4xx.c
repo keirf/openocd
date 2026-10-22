@@ -1243,12 +1243,14 @@ static const struct command_registration at32f4xx_exec_command_handlers[] = {
 		.name = "mass_erase",
 		.handler = at32x_handle_mass_erase_command,
 		.mode = COMMAND_EXEC,
+		.usage = "",
 		.help = "Erase entire flash device.",
 	},
 	{
 		.name = "usd_erase",
 		.handler = at32x_handle_usd_erase_command,
 		.mode = COMMAND_EXEC,
+		.usage = "",
 		.help = "Erase USD/Options area.",
 	},
 	{
